@@ -1,0 +1,5 @@
+url_length,domain_length,path_length,qty_dot_domain,qty_hyphen_domain,qty_underline_domain,qty_digit_domain,has_at_symbol,has_double_slash_path,max_levenshtein_ratio,max_jaro_winkler_score,is_punycode,domain_age_days,ssl_valid_days,url,is_phishing
+46,23,15,3,3,0,2,0,0,1.0,1.0,0,-1,-1,https://xn--vtop-43da.vit.ac.in/bali/login.php,1
+38,14,16,2,0,0,0,0,0,1.0,1.0,0,-1,-1,https://www.google.com/search?q=python,0
+45,32,6,1,3,0,0,0,0,0.47619047619047616,0.6395833333333333,0,-1,-1,http://paypal-security-update-alert.com/login,1
+28,9,11,2,0,0,0,0,0,1.0,1.0,0,-1,-1,https://vit.ac.in/admissions,0
