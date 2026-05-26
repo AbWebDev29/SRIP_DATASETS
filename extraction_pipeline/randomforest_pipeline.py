@@ -1,26 +1,25 @@
 import datetime
 import ssl
 import socket
+import os
 import tldextract
 import Levenshtein
 import pandas as pd
-from sklearn.model_selection import train_test_split
 import whois
 import warnings
 
-# Optional: Silence external library warnings if they clutter your terminal
+# Silence external library warnings if they clutter your terminal
 warnings.filterwarnings("ignore", category=UserWarning, module='whois')
-
 # ==========================================
 # CONFIGURATION & REFERENCE POOL
 # ==========================================
 TARGET_BRANDS = ["google.com", "microsoft.com", "paypal.com", "vit.ac.in"]
 
-# FIX: Used .top_domain_under_public_suffix instead of deprecated .registered_domain
+# Extracted top domains for lookalike calculations
 TARGET_DOMAINS = [tldextract.extract(url).top_domain_under_public_suffix for url in TARGET_BRANDS]
 
 # ==========================================
-# FEATURE EXTRACTION LAYERS
+# FEATURE EXTRACTION LAYER
 # ==========================================
 
 def extract_features(url: str, check_external: bool = False) -> dict:
@@ -57,6 +56,8 @@ def extract_features(url: str, check_external: bool = False) -> dict:
     max_jaro_winkler_score = 0.0
     
     for target in TARGET_DOMAINS:
+        if not domain or not target:
+            continue
         lev_ratio = Levenshtein.ratio(domain, target)
         if lev_ratio > max_levenshtein_ratio:
             max_levenshtein_ratio = lev_ratio
@@ -106,67 +107,93 @@ def extract_features(url: str, check_external: bool = False) -> dict:
     return features
 
 # ==========================================
-# STEP 2 & 3: MATRIX GENERATION & SPLITTING
+# UNLABELED DATASET PROCESSING PIPELINE
 # ==========================================
 
-def process_dataset_to_matrices(raw_data_list: list, include_network: bool = False):
+def process_unlabeled_file(file_path: str, include_network: bool = False) -> pd.DataFrame:
     """
-    Processes raw inputs, builds the Pandas DataFrame, saves to CSV, 
-    and returns X and y train/test matrices with fallback safety for tiny sets.
+    Reads a CSV or Excel file of unlabeled URLs, extracts security features,
+    saves the matrix to a CSV, and returns a pure numerical feature matrix X.
     """
-    processed_rows = []
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"❌ Could not find file at: {file_path}")
+
+    # 1. Load file dynamically based on extension
+    print(f"📖 Loading dataset from {file_path}...")
+    if file_path.endswith('.csv'):
+        df_raw = pd.read_csv(file_path)
+    elif file_path.endswith('.xlsx') or file_path.endswith('.xls'):
+        df_raw = pd.read_excel(file_path)
+    else:
+        raise ValueError("❌ Unsupported file format. Please use a .csv or .xlsx file.")
     
-    print("⏳ Extracting features from dataset...")
-    for url, label in raw_data_list:
-        feat_dict = extract_features(url, check_external=include_network)
-        feat_dict['url'] = url
-        feat_dict['is_phishing'] = label
+    # 2. Smart Column Detection for URLs
+    url_col = None
+    possible_names = ['url', 'urls', 'domain', 'domains', 'link', 'links', 'address']
+    for col in df_raw.columns:
+        if str(col).lower().strip() in possible_names:
+            url_col = col
+            break
+            
+    if not url_col:
+        url_col = df_raw.columns[0]
+        print(f"⚠️ Could not find a distinct 'url' column name. Defaulting to the first column: '{url_col}'")
+
+    # 3. Extract Features
+    processed_rows = []
+    urls_to_process = df_raw[url_col].dropna()
+    total_urls = len(urls_to_process)
+    
+    print(f"⏳ Extracting features from {total_urls} URLs. Please wait...")
+    for idx, url in enumerate(urls_to_process, 1):
+        url_str = str(url).strip()
+        
+        # Skip empty strings
+        if not url_str:
+            continue
+            
+        feat_dict = extract_features(url_str, check_external=include_network)
+        feat_dict['original_url'] = url_str  # Maintained mapping layout
         processed_rows.append(feat_dict)
         
-    df = pd.DataFrame(processed_rows)
+        # Print progress every 50 URLs so you know it hasn't frozen
+        if idx % 50 == 0 or idx == total_urls:
+            print(f"   Processed {idx}/{total_urls} URLs...")
+        
+    df_features = pd.DataFrame(processed_rows)
     
-    output_filename = "processed_features.csv"
-    df.to_csv(output_filename, index=False)
-    print(f"✅ Saved processed feature matrix to {output_filename}")
+    # 4. Save Features to disk
+    output_filename = "extracted_features_output.csv"
+    df_features.to_csv(output_filename, index=False)
+    print(f"✅ Master feature logging saved to: {output_filename}")
     
-    X = df.drop(columns=['url', 'is_phishing'])
-    y = df['is_phishing']
-    
-    # --- FIX: Safe Stratified Split Check ---
-    # Determine the minimum instances of each class
-    class_counts = y.value_counts()
-    min_class_count = class_counts.min() if len(class_counts) > 1 else 0
-    expected_test_samples = len(df) * 0.20
-
-    # Stratification fails if expected test samples per class layout is mathematically impossible
-    if min_class_count < 2 or expected_test_samples < 2:
-        print("⚠️  Dataset too small for reliable stratification. Falling back to simple split.")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.25, random_state=42 # Slightly higher test size to ensure at least 1 sample drops in
-        )
-    else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.20, stratify=y, random_state=42
-        )
-    
-    print(f"📊 Matrix generation complete!")
-    print(f"   Training shape: {X_train.shape}")
-    print(f"   Testing shape : {X_test.shape}")
-    
-    return X_train, X_test, y_train, y_test
+    # 5. Build pure numerical inference matrix X (Drops string components)
+    X = df_features.drop(columns=['original_url'])
+    return X
 
 # ==========================================
 # PIPELINE RUNNER
 # ==========================================
 if __name__ == "__main__":
-    mock_dataset = [
-        ("https://xn--vtop-43da.vit.ac.in/bali/login.php", 1), 
-        ("https://www.google.com/search?q=python", 0),          
-        ("http://paypal-security-update-alert.com/login", 1),  
-        ("https://vit.ac.in/admissions", 0)                    
-    ]
+    # 🛑 UPDATE THIS: Put the path to your CSV or Excel file here!
+    # Example: "my_links.csv" or "C:/Users/Name/Documents/urls.xlsx"
+    YOUR_FILE_PATH = "/Users/anvibansal/SRIP/domain_dataset_10k.csv"
     
-    X_train, X_test, y_train, y_test = process_dataset_to_matrices(mock_dataset, include_network=False)
-    
-    print("\nSample processed vector row layout:")
-    print(X_train.head(1).to_dict(orient='records')[0])
+    # Optional: Turn this into True if you want to perform live WHOIS/SSL checks 
+    # Warning: Turning network checks True on large files will take a long time!
+    RUN_NETWORK_CHECKS = False 
+
+    try:
+        # Generate the numerical matrix
+        X_matrix = process_unlabeled_file(YOUR_FILE_PATH, include_network=RUN_NETWORK_CHECKS)
+        
+        print("\n📊 Extraction Pipeline Successfully Finished!")
+        print(f"   Numerical Matrix Layout Shape: {X_matrix.shape}")
+        print("\nSample processed vector row layout:")
+        if not X_matrix.empty:
+            print(X_matrix.head(1).to_dict(orient='records')[0])
+            
+        print("\n💡 Next step: You can feed this 'X_matrix' directly into your trained model.predict(X_matrix)")
+
+    except FileNotFoundError:
+        print(f"\n💡 [Setup Note]: To test this with your own files, replace 'your_unlabeled_file.csv' at the bottom of the script with your actual file path.")
