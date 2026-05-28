@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Phishing Shield",
+  "version": "1.2",
+  "description": "Real-time Machine Learning URL verification system.",
+  "permissions": ["activeTab", "tabs", "scripting"],
+  "host_permissions": ["http://127.0.0.1:5000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

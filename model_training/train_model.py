@@ -2,34 +2,19 @@ import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report
 import joblib
 
 def train_phishing_detector():
-    # 1. Paths to your files (Update paths if necessary)
     features_csv = "/Users/anvibansal/SRIP/extraction_pipeline/extracted_features_output.csv"
-    dataset_csv = "/Users/anvibansal/SRIP/domain_dataset_10k.csv" # or wherever domain_dataset_10k.csv is saved
-    model_output_path = "phishing_rf_model.pkl"
-    
-    # Fallback to local files if absolute path is different
-    if not os.path.exists(features_csv):
-        features_csv = "extracted_features_output.csv"
-    if not os.path.exists(dataset_csv):
-        dataset_csv = "domain_dataset_10k.csv"
+    dataset_csv = "/Users/anvibansal/SRIP/domain_dataset_10k.csv"
+    model_output_path = "/Users/anvibansal/SRIP/extension_detector/backend/phishing_rf_model.pkl"
 
-    print(f"[*] Loading features from: {features_csv}")
-    print(f"[*] Loading source labels from: {dataset_csv}")
+    print("[*] Loading datasets...")
+    df_features = pd.read_csv(features_csv).drop_duplicates(subset=['original_url'])
+    df_dataset = pd.read_csv(dataset_csv).drop_duplicates(subset=['domain'])
     
-    # 2. Read the files
-    df_features = pd.read_csv(features_csv)
-    df_dataset = pd.read_csv(dataset_csv)
-    
-    # 3. Clean duplicates to avoid artifact rows
-    df_features = df_features.drop_duplicates(subset=['original_url'])
-    df_dataset = df_dataset.drop_duplicates(subset=['domain'])
-    
-    # 4. Merge datasets on the domain strings
-    print("[*] Merging datasets to attach target labels...")
+    print("[*] Merging datasets...")
     merged_df = pd.merge(
         df_features, 
         df_dataset[['domain', 'label']], 
@@ -37,57 +22,40 @@ def train_phishing_detector():
         right_on='domain', 
         how='inner'
     )
-    print(f"[+] Successfully matched {merged_df.shape[0]} unique rows with labels.")
     
-    # 5. Separate features and target
-    target_col = 'label'
-    # Drop columns that are text or redundant identifiers
-    columns_to_drop = [target_col, 'original_url', 'domain']
-    feature_cols = [col for col in merged_df.columns if col not in columns_to_drop]
-    
-    print(f"[*] Extracting {len(feature_cols)} training features...")
+    # WE DROP domain_age_days and ssl_valid_days because they are mostly -1 in your file
+    feature_cols = [
+        'url_length', 'domain_length', 'path_length', 'qty_dot_domain',
+        'qty_hyphen_domain', 'qty_underline_domain', 'qty_digit_domain',
+        'has_at_symbol', 'has_double_slash_path', 'max_levenshtein_ratio',
+        'max_jaro_winkler_score', 'is_punycode'
+    ]
     
     X = merged_df[feature_cols]
-    y = merged_df[target_col]
+    y = merged_df['label']
     
-    # 6. Split Data (80% Train, 20% Test)
+    print(f"[*] Training on {len(feature_cols)} robust lexical features...")
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-    print(f"[*] Data split complete. Training: {X_train.shape[0]}, Testing: {X_test.shape[0]}")
     
-    # 7. Train Random Forest Classifier
-    print("[*] Initializing and training Random Forest Classifier...")
+    # Max depth set to 10 to ensure generalization
     rf_model = RandomForestClassifier(
         n_estimators=100, 
-        max_depth=15, 
+        max_depth=10, 
         random_state=42, 
         n_jobs=-1
     )
     rf_model.fit(X_train, y_train)
-    print("[+] Model training complete.")
     
-    # 8. Evaluate performance
     y_pred = rf_model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
+    print(f"[+] Training complete. Test Accuracy: {accuracy_score(y_test, y_pred) * 100:.2f}%")
+    print(classification_report(y_test, y_pred))
     
-    print("\n" + "="*60)
-    print("🚀 MODEL PERFORMANCE EVALUATION")
-    print("="*60)
-    print(f"Overall Classification Accuracy: {accuracy * 100:.2f}%")
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred, target_names=['Safe (0)', 'Phishing (1)']))
-    print("\nConfusion Matrix:")
-    print(confusion_matrix(y_test, y_pred))
-    print("="*60 + "\n")
-    
-    # 9. Save both the model and the feature list structure for Flask API consumption
-    model_payload = {
-        'model': rf_model,
-        'features': feature_cols
-    }
+    # Save model and feature list keys together
+    model_payload = {'model': rf_model, 'features': feature_cols}
     joblib.dump(model_payload, model_output_path)
-    print(f"[+] Production-ready model payload saved to: {model_output_path}")
+    print(f"[+] Robust model payload saved to: {model_output_path}")
 
 if __name__ == "__main__":
     train_phishing_detector()
