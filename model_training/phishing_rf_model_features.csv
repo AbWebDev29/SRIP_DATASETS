@@ -1,0 +1,14 @@
+rank,feature_name,weight_importance
+1,qty_dot_url,0.37568835176736115
+2,qty_dot_domain,0.31297586292203805
+3,qty_digit_domain,0.1253062667103255
+4,domain_length,0.08182793126526622
+5,url_length,0.07856330826536824
+6,qty_hyphen_domain,0.02403142234034306
+7,is_punycode,0.001379673369230623
+8,qty_underline_domain,0.00012324087018714884
+9,has_at_symbol,0.00010394248988012208
+10,path_length,0.0
+11,has_double_slash_path,0.0
+12,qty_slash_url,0.0
+13,has_http_in_path,0.0
