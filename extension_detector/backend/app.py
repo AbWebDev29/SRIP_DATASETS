@@ -46,8 +46,11 @@ except Exception as e:
 
 def extract_lexical_features(url):
     """
-    Extract exactly 13 lexical features from a URL.
-    MUST match the exact order and logic from train_model.py.
+    Extract exactly 13 lexical features from a FULL URL.
+    ─────────────────────────────────────────────────────
+    This function is IDENTICAL in logic to `extract_features` in
+    model_training/train_model.py so that training and serving produce
+    the exact same feature vector — eliminating any training-serving skew.
     """
     if not url or not isinstance(url, str): return None
     url = url.strip().lower()
@@ -125,7 +128,7 @@ def health():
 
 if __name__ == '__main__':
     print("="*60)
-    print("  PHISHING DETECTION: FLASK BACKEND v3")
+    print("  PHISHING DETECTION: FLASK BACKEND v4  (Skew-Fixed Model)")
     print(f"  Model: {len(trained_features)} features loaded")
     print("  Server: http://127.0.0.1:5000")
     print("="*60)

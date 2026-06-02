@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-ML Pipeline v3.2: 5 CSV Sources · 13 Lexical Features · Balanced RF · Comprehensive Master CSV Export
+ML Pipeline v4.0: 5 CSV Sources · 13 Lexical Features · Full-URL Feature Extraction · Balanced RF
+────────────────────────────────────────────────────────────────────────────────
+FIX: Training-Serving Feature Skew
+  Previous versions dropped the original URL and extracted features from the
+  domain string only, which collapsed path_length to 0 and qty_slash_url to 2
+  for every legitimate row.  This version retains the full URL through the
+  entire pipeline and extracts features from it, matching the serving path in
+  backend/app.py exactly.
 """
 import os, sys, re
 import pandas as pd
@@ -42,6 +49,9 @@ def extract_domain(url):
     except: return None
 
 def extract_features(url):
+    """Extract exactly 13 lexical features from a FULL URL.
+    This function is identical to `extract_lexical_features` in backend/app.py
+    so training and serving use the same feature vector."""
     if not url or not isinstance(url, str): return None
     url = url.strip().lower()
     if not url.startswith(('http://','https://','ftp://')): url = 'http://' + url
@@ -83,11 +93,20 @@ def norm_label(val):
     try: return int(float(s))
     except: return None
 
+# ─── DATA LOADERS ────────────────────────────────────────────────────────────
+# Each loader now returns df[['url', 'domain', 'label']]
+# 'url' = the full original URL string (used for feature extraction)
+# 'domain' = extracted hostname (used for dedup & allowlist matching)
+# If a source only has bare domains, 'url' is set = 'domain' as a safe fallback.
+
 def load_generic(path):
+    """Load a generic CSV with auto-detected URL and label columns."""
     try:
         df = pd.read_csv(path, on_bad_lines='skip')
         print(f"  Loaded {os.path.basename(path)}: {len(df)} rows")
-        uc = auto_url_col(df); df['domain'] = df[uc].apply(extract_domain)
+        uc = auto_url_col(df)
+        df['url'] = df[uc].astype(str).str.strip()
+        df['domain'] = df['url'].apply(extract_domain)
         lc = auto_label_col(df)
         if lc:
             df['label'] = df[lc].apply(norm_label)
@@ -95,32 +114,45 @@ def load_generic(path):
             fn = os.path.basename(path).lower()
             df['label'] = 1 if ('phish' in fn or 'phi' in fn or 'mal' in fn) else 0
         df = df.dropna(subset=['domain','label']); df['label'] = df['label'].astype(int)
-        print(f"    → {len(df)} usable"); return df[['domain','label']]
+        # Fallback: if the raw value looks like a bare domain (no slashes), copy domain→url
+        df['url'] = df.apply(
+            lambda r: r['domain'] if '/' not in str(r['url']).replace('http://','').replace('https://','').strip('/') else r['url'],
+            axis=1
+        )
+        print(f"    → {len(df)} usable"); return df[['url','domain','label']]
     except Exception as e:
-        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['domain','label'])
+        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['url','domain','label'])
 
 def load_saf_url(path):
+    """Load saf_url.csv — index,domain format. Domains only; url = domain fallback."""
     try:
         df = pd.read_csv(path, header=None, names=['idx','raw'], on_bad_lines='skip')
         print(f"  Loaded saf_url.csv: {len(df)} rows")
-        df['domain'] = df['raw'].apply(extract_domain); df['label'] = 0
+        df['domain'] = df['raw'].apply(extract_domain)
+        df['label'] = 0
         df = df.dropna(subset=['domain'])
-        print(f"    → {len(df)} usable"); return df[['domain','label']]
+        # saf_url only has bare domains → copy domain into url as fallback
+        df['url'] = df['domain']
+        print(f"    → {len(df)} usable"); return df[['url','domain','label']]
     except Exception as e:
-        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['domain','label'])
+        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['url','domain','label'])
 
 def load_phi_url(path):
+    """Load phi_url.csv — has full URLs in the first column."""
     try:
         df = pd.read_csv(path, on_bad_lines='skip')
         print(f"  Loaded phi_url.csv: {len(df)} rows")
-        uc = auto_url_col(df); df['domain'] = df[uc].apply(extract_domain)
-        df['label'] = 1; df = df.dropna(subset=['domain'])
-        print(f"    → {len(df)} usable"); return df[['domain','label']]
+        uc = auto_url_col(df)
+        df['url'] = df[uc].astype(str).str.strip()
+        df['domain'] = df['url'].apply(extract_domain)
+        df['label'] = 1
+        df = df.dropna(subset=['domain'])
+        print(f"    → {len(df)} usable"); return df[['url','domain','label']]
     except Exception as e:
-        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['domain','label'])
+        print(f"  ERROR {path}: {e}"); return pd.DataFrame(columns=['url','domain','label'])
 
 def main():
-    print("="*60+"\n  PHISHING DETECTION: ML PIPELINE v3.2\n"+"="*60)
+    print("="*60+"\n  PHISHING DETECTION: ML PIPELINE v4.0  (Full-URL Skew Fix)\n"+"="*60)
     bp = '/Users/anvibansal/SRIP'
     files = {
         'domain_dataset_10k.csv': load_generic,
@@ -141,6 +173,7 @@ def main():
     combined = combined.drop_duplicates(subset=['domain'], keep='last')
     print(f"  After dedup: {len(combined)}")
 
+    # --- ALLOWLIST OVERRIDE ---
     mask = combined['domain'].apply(is_trusted_domain)
     ov = int((combined.loc[mask,'label']!=0).sum())
     combined.loc[mask,'label'] = 0
@@ -151,12 +184,13 @@ def main():
 
     out_csv = os.path.join(bp, 'final_processed_dataset.csv')
     combined.to_csv(out_csv, index=False)
-    print(f"\n--- PHASE 2: EXPORTED CLEAN DOMAINS → {out_csv} ({len(combined)} rows) ---")
+    print(f"\n--- PHASE 2: EXPORTED CLEAN DATASET → {out_csv} ({len(combined)} rows) ---")
 
-    print("\n--- PHASE 3: EXTRACTING 13 FEATURES & CREATING MASTER CSV ---")
+    # ── PHASE 3: EXTRACT 13 FEATURES FROM FULL URL ─────────────────────────
+    print("\n--- PHASE 3: EXTRACTING 13 FEATURES FROM FULL URLs & CREATING MASTER CSV ---")
     recs, labs, skip = [], [], 0
     for _, r in combined.iterrows():
-        f = extract_features(r['domain'])
+        f = extract_features(r['url'])          # ← FIX: use full URL, not domain
         if f is None: skip+=1; continue
         f['domain_name'] = r['domain']  # Inject string index for master spreadsheet readability
         recs.append(f)
@@ -175,6 +209,16 @@ def main():
     master_features_df.to_csv(out_master_csv, index=False)
     print(f"  ✓ SUCCESS: Master Features Matrix saved → {out_master_csv}")
     print(f"  Matrix Shape: {master_features_df.shape} (skipped {skip} bad structures)")
+
+    # ── Sanity check: verify path_length and qty_slash_url are no longer collapsed ──
+    safe_rows = master_features_df[master_features_df['label'] == 0]
+    avg_path = safe_rows['path_length'].mean()
+    avg_slash = safe_rows['qty_slash_url'].mean()
+    print(f"\n  [SKEW CHECK] Safe-label rows → avg path_length={avg_path:.2f}, avg qty_slash_url={avg_slash:.2f}")
+    if avg_path < 0.5 and avg_slash < 2.5:
+        print("  ⚠  WARNING: path_length and qty_slash_url still look collapsed. Check your URL sources.")
+    else:
+        print("  ✓ Feature distributions look healthy — skew eliminated.")
 
     print("\n--- PHASE 4: TRAINING RF (balanced) ---")
     X = master_features_df[FEATURE_COLUMNS]
@@ -206,7 +250,7 @@ def main():
     importance_df.to_csv(out_model_csv, index=False)
     print(f"--- PHASE 5B: EXPORTED MODEL INSIGHTS CSV → {out_model_csv} ---")
     
-    print("\n"+"="*60+"\n  ✓ TRAINING & ALL THREE EXPORTS COMPLETE\n"+"="*60)
+    print("\n"+"="*60+"\n  ✓ TRAINING & ALL EXPORTS COMPLETE  (v4.0 — Skew Fixed)\n"+"="*60)
 
 if __name__ == '__main__':
     main()
